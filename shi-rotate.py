@@ -271,7 +271,7 @@ def get_data_from_gen(genfile):
                 sys.exit("Failed to parse NBAS from FILE47")
         else:
             sys.exit("NBAS is not found in the first line of FILE47. Please check the FILE47.")
-        shirotate_log.write(f"Number of basis functions (NBAS): {nbas}\n")
+        shirotate_log.write(f"\n\n\nNumber of basis functions (NBAS): {nbas}\n")
 
 
         # Parse the rest of the file
@@ -287,136 +287,135 @@ def get_data_from_gen(genfile):
             line = f.readline()
 
         # Calculate numbers of alpha, beta electrons by density matrix.
-        alpha_elec=int(np.trace(alpha_density_matrix@overlap_matrix))
-        shirotate_log.write("\n")
-        shirotate_log.write("\n")
-        shirotate_log.write(f"Alpha electrons: {alpha_elec}\n")
-        beta_elec=int(np.trace(beta_density_matrix@overlap_matrix))
-        shirotate_log.write(f"Beta electrons: {beta_elec}\n" )
+        alpha_elec=int(round(np.trace(alpha_density_matrix@overlap_matrix)))
+        shirotate_log.write(f"                 Alpha electrons: {alpha_elec}\n")
+        beta_elec=int(round(np.trace(beta_density_matrix@overlap_matrix)))
+        shirotate_log.write(f"                  Beta electrons: {beta_elec}\n" )
+
 
         return alpha_coef_matrix, beta_coef_matrix, overlap_matrix, alpha_density_matrix, beta_density_matrix, alpha_fock_matrix, beta_fock_matrix, nbas, alpha_elec, beta_elec
 
+# Get C, S_ao, DM, Fock matrices, nbas, number of alpha-beta electrons from file47
+# density matrix is not used, they are discarded.
+c_a,c_b,S_basis,_,_,F_alfa,F_beta,nbas,alpha_homo_idx,beta_homo_idx = get_data_from_gen(file47)
+beta_sumo_idx=beta_homo_idx+1
+shirotate_log.write("\n")
+shirotate_log.write(f"                Alpha HOMO index: {alpha_homo_idx}\n")
+shirotate_log.write(f"                 Beta SUMO index: {beta_sumo_idx}\n")
+# Get the MO coefs
+# alpha_coef and beta_coef are NOT full coefs matrix. It only include alpha occupied  (all occ)
+# and beta occupied + beta SUMO (all occ+1virt)
+alpha_coef=c_a[0:alpha_homo_idx,:]  # All occupied alpha MOs only
+alpha_coef=alpha_coef.T             # Transpose due to row-vector in file47
+beta_coef=c_b[0:beta_sumo_idx,:]    # All occupied beta MOs + SUMO
+beta_coef=beta_coef.T               # Transpose due to row-vector in file47
+initial_S_ab=reduce(np.dot, (alpha_coef.T, S_basis, beta_coef))
 
+
+# Alpha set contains orbitals that will be used in rotation
+alpha_set=[]
+beta_set=[]
+recur_step=0
+max_depth=10
+def check_overlap(a,b):
+    if a=="all":
+        ib=b-1
+        for ia in range(beta_sumo_idx):
+            if abs(initial_S_ab[ia][ib])>args.overlap_threshold:
+                if not(ia+1 in alpha_set):
+                    alpha_set.append(ia+1)
+    if b=="all":
+        ia=a-1
+        for ib in range(beta_sumo_idx):
+            if abs(initial_S_ab[ia][ib])>args.overlap_threshold:
+                if not(ib+1 in beta_set):
+                    beta_set.append(ib+1)
+
+def recursive_check(current_depth=0):
+    if current_depth >= max_depth:
+        shirotate_log.write("Maximum recursion depth reached!\n")
+        return
+
+    if(len(alpha_set)==0):
+        check_overlap("all",beta_sumo_idx)
+        for a in alpha_set:
+            check_overlap(a,"all")
+    if len(alpha_set) > len(beta_set):
+        # Find more beta orbitals for existing alpha orbitals
+        for a in alpha_set:
+            check_overlap(a, "all")
+    elif len(beta_set) > len(alpha_set):
+        # Find more alpha orbitals for existing beta orbitals
+        for b in beta_set:
+            check_overlap("all", b)
+
+    # Check if sets are equal in length
+    if len(alpha_set) != len(beta_set):
+        current_depth=current_depth+1
+        recursive_check(current_depth)  # Recurse until sets are equal
+    else:
+        shirotate_log.write("OVERLAP THRESHOLD: "+str(args.overlap_threshold)+"\n")
+
+if args.overlap_threshold == 0.0:
+    alpha_set=[i+1 for i in range(alpha_homo_idx)]
+    beta_set=[i+1 for i in range(alpha_homo_idx)]
+else:
+    recursive_check(0)
+
+alpha_set=sorted(alpha_set)
+beta_set=sorted(beta_set)
+shirotate_log.write("\nINITIAL OVERLAP\n")
+shirotate_log.write("=====================\n")
+print_overlap(initial_S_ab,alpha_homo_idx,7)
+
+shirotate_log.write("\n")
+shirotate_log.write(f"Alpha set used in rotation {len(alpha_set)} MOs: ")
+if args.overlap_threshold == 0.0:
+    shirotate_log.write(f"[All] = {alpha_homo_idx} occ.")
+else:
+    h=0
+    shirotate_log.write("\n")
+    for orb in alpha_set:
+        h=h+1
+        shirotate_log.write(f"{orb}  ")
+        if h%10==0:
+            shirotate_log.write(f"\n")
+
+shirotate_log.write("\nBeta reference set: ")
+if args.overlap_threshold==0.0:
+    shirotate_log.write(f"[All] = {beta_sumo_idx-1} occ + 1 vir.")
+else:
+    h=0
+    shirotate_log.write("\n")
+    for orb in beta_set:
+        h=h+1
+        shirotate_log.write(f"{orb}  ")
+        if h%10==0:
+            shirotate_log.write(f"\n")
+shirotate_log.write("\n")
+#Define the shape of rotation matrix
+N = len(alpha_set)
+num_elements = N * (N - 1) // 2 # Number of unique elements in X
+
+
+# Select alpha and beta orbitals by sets determined by overlap threshold
+A=alpha_coef[:,np.array(alpha_set)-1]
+B=beta_coef[:,np.array(beta_set)-1]
+s_ab_matrix=jnp.dot(A.T,jnp.dot(S_basis, B))
 
 def shi_rotate():
-    # Get C, S_ao, DM, Fock matrices, nbas, number of alpha-beta electrons from file47
-    # density matrix is not used, they are discarded.
-    c_a,c_b,S_basis,_,_,F_alfa,F_beta,nbas,alpha_homo_idx,beta_homo_idx=get_data_from_gen(file47)
-    beta_sumo_idx=beta_homo_idx+1
-    shirotate_log.write("Alpha HOMO index is: "+str(alpha_homo_idx)+"    Beta SUMO index is: "+str(beta_sumo_idx)+"\n")
-    # Get the MO coefs
-    # alpha_coef and beta_coef are NOT full coefs matrix. It only include alpha occupied  (all occ)
-    # and beta occupied + beta SUMO (all occ+1virt)
-    alpha_coef=c_a[0:alpha_homo_idx,:]  # All occupied alpha MOs only
-    alpha_coef=alpha_coef.T             # Transpose due to row-vector in file47
-    beta_coef=c_b[0:beta_sumo_idx,:]    # All occupied beta MOs + SUMO
-    beta_coef=beta_coef.T               # Transpose due to row-vector in file47
-    initial_S_ab=reduce(np.dot, (alpha_coef.T, S_basis, beta_coef))
-
-
-    # Alpha set contains orbitals that will be used in rotation
-    alpha_set=[]
-    beta_set=[]
-    recur_step=0
-    max_depth=10
-    def check_overlap(a,b):
-        if a=="all":
-            ib=b-1
-            for ia in range(beta_sumo_idx):
-                if abs(initial_S_ab[ia][ib])>args.overlap_threshold:
-                    if not(ia+1 in alpha_set):
-                        alpha_set.append(ia+1)
-        if b=="all":
-            ia=a-1
-            for ib in range(beta_sumo_idx):
-                if abs(initial_S_ab[ia][ib])>args.overlap_threshold:
-                    if not(ib+1 in beta_set):
-                        beta_set.append(ib+1)
-
-    def recursive_check(current_depth=0):
-        if current_depth >= max_depth:
-            shirotate_log.write("Maximum recursion depth reached!\n")
-            return
-
-        if(len(alpha_set)==0):
-            check_overlap("all",beta_sumo_idx)
-            for a in alpha_set:
-                check_overlap(a,"all")
-        if len(alpha_set) > len(beta_set):
-            # Find more beta orbitals for existing alpha orbitals
-            for a in alpha_set:
-                check_overlap(a, "all")
-        elif len(beta_set) > len(alpha_set):
-            # Find more alpha orbitals for existing beta orbitals
-            for b in beta_set:
-                check_overlap("all", b)
-
-        # Check if sets are equal in length
-        if len(alpha_set) != len(beta_set):
-            current_depth=current_depth+1
-            recursive_check(current_depth)  # Recurse until sets are equal
-        else:
-            shirotate_log.write("OVERLAP THRESHOLD: "+str(args.overlap_threshold)+"\n")
-
-    if args.overlap_threshold == 0.0:
-        alpha_set=[i+1 for i in range(alpha_homo_idx)]
-        beta_set=[i+1 for i in range(alpha_homo_idx)]
-    else:
-        recursive_check(0)
-
-    alpha_set=sorted(alpha_set)
-    beta_set=sorted(beta_set)
-    shirotate_log.write("\nINITIAL OVERLAP\n")
-    shirotate_log.write("=====================\n")
-    print_overlap(initial_S_ab,alpha_homo_idx,7)
-
-    shirotate_log.write("\n")
-    shirotate_log.write(f"Alpha set used in rotation {len(alpha_set)} MOs: ")
-    if args.overlap_threshold == 0.0:
-        shirotate_log.write(f"[All] = {alpha_homo_idx} occ.")
-    else:
-        h=0
-        shirotate_log.write("\n")
-        for orb in alpha_set:
-            h=h+1
-            shirotate_log.write(f"{orb}  ")
-            if h%10==0:
-                shirotate_log.write(f"\n")
-
-    shirotate_log.write("\nBeta reference set: ")
-    if args.overlap_threshold==0.0:
-        shirotate_log.write(f"[All] = {beta_sumo_idx-1} occ + 1 vir.")
-    else:
-        h=0
-        shirotate_log.write("\n")
-        for orb in beta_set:
-            h=h+1
-            shirotate_log.write(f"{orb}  ")
-            if h%10==0:
-                shirotate_log.write(f"\n")
-    shirotate_log.write("\n")
-    #Define the shape of rotation matrix
-    N = len(alpha_set)
-    num_elements = N * (N - 1) // 2 # Number of unique elements in X
-
-
-    # Select alpha and beta orbitals by sets determined by overlap threshold
-    A=alpha_coef[:,np.array(alpha_set)-1]
-    B=beta_coef[:,np.array(beta_set)-1]
-    s_ab_matrix=jnp.dot(A.T,jnp.dot(S_basis, B))
-
 
     # Get the initial guess for vector X to form antisymmetric matrix
-    intial_guess=np.zeros(num_elements)
+    initial_guess=np.zeros(num_elements)
     row_indices, col_indices = jnp.triu_indices(N, k=1)
     l=0
     for i, j in zip(row_indices, col_indices):
         abs_overl=abs(s_ab_matrix[i,j])
         if abs_overl>0.90 or abs_overl<0.10:
-            intial_guess[l] = 0.0
+            initial_guess[l] = 0.0
         else:
-            intial_guess[l]=-s_ab_matrix[i,j]+np.random.uniform(-0.1,0.1)
-        l =l+ 1
+            initial_guess[l]=-s_ab_matrix[i,j]+np.random.uniform(-0.1,0.1)
+        l = l + 1
 
     def antisymm_mat_from_vec(vec):
         X = jnp.zeros((N, N))
@@ -454,7 +453,7 @@ def shi_rotate():
     shirotate_log.write("-----------------------------\n")
 
     result = minimize(lambda v, s_ab_matrix: np.asarray(objective_function(v, s_ab_matrix)),
-                  intial_guess, args=(s_ab_matrix),
+                  initial_guess, args=(s_ab_matrix),
                   jac=lambda v, s_ab_matrix: np.asarray(grad_fn(v, s_ab_matrix)),
                   method='CG',
                   callback=callback_func)
@@ -559,11 +558,11 @@ def shi_rotate():
         print(old_alpha_energies[alpha_homo_idx-1])
 
     if shi_gap == 0.0 and b_HOMO_energy < a_HOMO_energy:
-        shirotate_log.write("The molecule does NOT exhibit SHI characteristics. (non SHI)\n")
+        shirotate_log.write("Classification: (non SHI)\n")
     elif shi_gap == 0.0 and b_HOMO_energy > a_HOMO_energy:
-        shirotate_log.write("The molecule has paritial SHI characteristics. (partial SHI)")
+        shirotate_log.write("Classification: (partial SHI)")
     elif shi_gap > 0.0 and b_HOMO_energy > a_HOMO_energy:
-        shirotate_log.write("The molecule has SHI characteristics. (SHI)")
+        shirotate_log.write("Classification: (SHI)")
 
     if args.movecs:
         numb_occ_cubes=4
