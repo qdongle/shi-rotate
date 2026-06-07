@@ -466,6 +466,13 @@ shirotate_log.write("\nINITIAL OVERLAP\n")
 shirotate_log.write("=====================\n")
 print_overlap(initial_S_ab, numb_alfa_elec, 7)
 
+tot_diag = 0
+for i in range(initial_S_ab.shape[0]):
+    tot_diag += 1 if initial_S_ab[i, i] > 0.97 else 0
+print("Alpha and beta matching: " + str(tot_diag) + " diagonal elements > 0.97")
+print("Number of S_ab ", initial_S_ab.shape[0])
+
+
 shirotate_log.write("\n")
 shirotate_log.write(f"Alpha set used in rotation {len(alpha_set)} MOs: ")
 if args.overlap_threshold == 0.0:
@@ -532,7 +539,7 @@ def shi_rotate():
         #            = R.T C_alpha.T S_ao C_beta
         overlap = jnp.dot(R.T, s_ab_matrix)
         # Compute penalty by Frobenius Norm of ABS(overlap) subtract I (identity matrix)
-        obj_matrix = jnp.abs(overlap) - jnp.eye(N)
+        obj_matrix = overlap**2 - jnp.eye(N)
         J2 = jnp.sum(jnp.square(obj_matrix))
         # Return the sum of squared differences
         return J2
