@@ -549,7 +549,7 @@ def antisymm_mat_from_vec(vec):
     return X
 
 
-def objective_function(vec, s_ab_matrix):
+def objective_func(vec, s_ab_matrix):
     # Form antisymmetric matrix from vec
     X = antisymm_mat_from_vec(vec)
     # Form rotation matrix from X
@@ -561,11 +561,16 @@ def objective_function(vec, s_ab_matrix):
     # Compute penalty by Frobenius Norm of ABS(overlap) subtract I (identity matrix)
     obj_matrix = overlap**2 - jnp.eye(N)
     J2 = jnp.sum(jnp.square(obj_matrix))
-    # Return the sum of squared differences
+
     return J2
 
 
+step = 0
+
+
 def shi_rotate():
+    global step
+    step = 0
 
     # Get the initial guess for vector X to form antisymmetric matrix
     initial_guess = np.zeros(num_elements)
@@ -579,17 +584,23 @@ def shi_rotate():
             initial_guess[l] = -s_ab_matrix[i, j] + np.random.uniform(-0.1, 0.1)
         l = l + 1
 
-    grad_fn = jax.grad(objective_function)
+    grad_fn = jax.grad(objective_func)
 
     def callback_func(xk):
-        J2 = objective_function(xk, s_ab_matrix)
-        shirotate_log.write(f"{callback_func.step:5d}   {J2:10.8f} \n")
+        J2 = objective_func(xk, s_ab_matrix)
+        shirotate_log.write(f"{callback_func.step:>5d}   {J2:>12.8f} \n")
         callback_func.step += 1
 
     callback_func.step = 1
 
+    shirotate_log.write("=============================\n")
+    shirotate_log.write("         CONVERGENCE\n")
+    shirotate_log.write("=============================\n")
+    shirotate_log.write(" step     obj. func.\n")
+    shirotate_log.write("-----------------------------\n")
+
     result = minimize(
-        lambda v, s_ab_matrix: np.asarray(objective_function(v, s_ab_matrix)),
+        lambda v, s_ab_matrix: np.asarray(objective_func(v, s_ab_matrix)),
         initial_guess,
         args=(s_ab_matrix),
         jac=lambda v, s_ab_matrix: np.asarray(grad_fn(v, s_ab_matrix)),
@@ -597,20 +608,14 @@ def shi_rotate():
         callback=callback_func,
     )
 
-    shirotate_log.write("=============================\n")
-    shirotate_log.write("         CONVERGENCE\n")
-    shirotate_log.write("=============================\n")
-    shirotate_log.write(" step   objective function  \n")
-    shirotate_log.write("-----------------------------\n")
-
     shirotate_log.write("\n")
     shirotate_log.write(f"The minimization is done after {result.nit} steps.\n")
+    final_J2 = objective_func(result.x, s_ab_matrix)
     shirotate_log.write(f"Squared Frobenius norm     ||S^2-1||2F  =  {final_J2:.5f} \n")
 
     # Extract the final result
     final_rotation_matrix = expm(antisymm_mat_from_vec(result.x))
     shirotate_log.write("--------------------\n")
-    final_J2 = objective_function(result.x, s_ab_matrix)
 
     numb_steps = result.nit
 
@@ -685,7 +690,7 @@ def shi_rotate():
     shirotate_log.write("------------------------------\n")
     for idx in range(numb_alfa_elec):
         shirotate_log.write(
-            f"""{idx + 1:3d}     {old_alpha_energies[idx] * toEV:7.3f}     {final_occ_alpha_energies[idx] * toEV:7.3f}     {indices[idx]}"""
+            f"""{idx + 1:>3d} {old_alpha_energies[idx] * toEV:>12.3f} {final_occ_alpha_energies[idx] * toEV:>12.3f} {indices[idx]}"""
         )
     shirotate_log.write("\n")
     shirotate_log.write("\n")
@@ -698,7 +703,7 @@ def shi_rotate():
     shirotate_log.write("------------------------------\n")
     for idx in range(beta_sumo_idx):
         shirotate_log.write(
-            f"""{idx + 1:3d}     {final_occ_alpha_energies[idx] * toEV:7.3f}     {canonical_beta_energies[idx] * toEV:7.3f}   \n"""
+            f"""{idx + 1:>3d} {final_occ_alpha_energies[idx] * toEV:>12.3f} {canonical_beta_energies[idx] * toEV:>12.3f}   \n"""
         )
     shirotate_log.write("\n")
     shirotate_log.write("\n")
