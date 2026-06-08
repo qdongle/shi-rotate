@@ -508,6 +508,63 @@ B = beta_coef[:, np.array(beta_set) - 1]
 s_ab_matrix = jnp.dot(A.T, jnp.dot(S_basis, B))
 
 
+def permuted_identity(overlap, threshold=0.05):
+    abs_overlap = abs(overlap)
+    n_orbital = abs_overlap.shape[0]
+    strong_ovlp = []
+    for orb_idx in range(n_orbital):
+        row = abs_overlap[orb_idx]
+        # Find index of max element
+        max_idx = np.argmax(row)
+        max_ovlp = row[max_idx]
+        if max_ovlp < (1.0 - threshold):
+            return False  # No element close to 1
+        strong_ovlp.append(max_idx)
+
+    # Check if all strong overlap are unique [set in Python will remove duplicates]
+    if len(set(strong_ovlp)) != n_orbital:
+        return False
+
+    # Sort rows by their strong overlap index --> Create a identity permuted matrix
+    sorted_rows = sorted(
+        range(n_orbital), key=lambda orb_idx: np.argmax(abs_overlap[orb_idx])
+    )
+    permuted_mat = abs_overlap[sorted_rows]
+
+    # Verify
+    for orb_idx in range(n_orbital):
+        if permuted_mat[orb_idx, orb_idx] < (1.0 - threshold):
+            return False
+        for j in range(n_orbital):
+            if orb_idx != j and permuted_mat[orb_idx, j] > threshold:
+                return False
+    return True
+
+
+def antisymm_mat_from_vec(vec):
+    X = jnp.zeros((N, N))
+    triu_indices = jnp.triu_indices(N, k=1)
+    X = X.at[triu_indices].set(vec)
+    X = X - X.T
+    return X
+
+
+def objective_function(vec, s_ab_matrix):
+    # Form antisymmetric matrix from vec
+    X = antisymm_mat_from_vec(vec)
+    # Form rotation matrix from X
+    R = expm(X)
+    # Compute S' = C'_alpha.T S_ao C_beta
+    #            = (C_alpha * R).T S_ao C_beta
+    #            = R.T C_alpha.T S_ao C_beta
+    overlap = jnp.dot(R.T, s_ab_matrix)
+    # Compute penalty by Frobenius Norm of ABS(overlap) subtract I (identity matrix)
+    obj_matrix = overlap**2 - jnp.eye(N)
+    J2 = jnp.sum(jnp.square(obj_matrix))
+    # Return the sum of squared differences
+    return J2
+
+
 def shi_rotate():
 
     # Get the initial guess for vector X to form antisymmetric matrix
@@ -522,28 +579,6 @@ def shi_rotate():
             initial_guess[l] = -s_ab_matrix[i, j] + np.random.uniform(-0.1, 0.1)
         l = l + 1
 
-    def antisymm_mat_from_vec(vec):
-        X = jnp.zeros((N, N))
-        triu_indices = jnp.triu_indices(N, k=1)
-        X = X.at[triu_indices].set(vec)
-        X = X - X.T
-        return X
-
-    def objective_function(vec, s_ab_matrix):
-        # Form antisymmetric matrix from vec
-        X = antisymm_mat_from_vec(vec)
-        # Form rotation matrix from X
-        R = expm(X)
-        # Compute S' = C'_alpha.T S_ao C_beta
-        #            = (C_alpha * R).T S_ao C_beta
-        #            = R.T C_alpha.T S_ao C_beta
-        overlap = jnp.dot(R.T, s_ab_matrix)
-        # Compute penalty by Frobenius Norm of ABS(overlap) subtract I (identity matrix)
-        obj_matrix = overlap**2 - jnp.eye(N)
-        J2 = jnp.sum(jnp.square(obj_matrix))
-        # Return the sum of squared differences
-        return J2
-
     grad_fn = jax.grad(objective_function)
 
     def callback_func(xk):
@@ -552,12 +587,6 @@ def shi_rotate():
         callback_func.step += 1
 
     callback_func.step = 1
-
-    shirotate_log.write("=============================\n")
-    shirotate_log.write("         CONVERGENCE\n")
-    shirotate_log.write("=============================\n")
-    shirotate_log.write(" step   objective function  \n")
-    shirotate_log.write("-----------------------------\n")
 
     result = minimize(
         lambda v, s_ab_matrix: np.asarray(objective_function(v, s_ab_matrix)),
@@ -568,16 +597,21 @@ def shi_rotate():
         callback=callback_func,
     )
 
+    shirotate_log.write("=============================\n")
+    shirotate_log.write("         CONVERGENCE\n")
+    shirotate_log.write("=============================\n")
+    shirotate_log.write(" step   objective function  \n")
+    shirotate_log.write("-----------------------------\n")
+
+    shirotate_log.write("\n")
+    shirotate_log.write(f"The minimization is done after {result.nit} steps.\n")
+    shirotate_log.write(f"Squared Frobenius norm     ||S^2-1||2F  =  {final_J2:.5f} \n")
+
     # Extract the final result
     final_rotation_matrix = expm(antisymm_mat_from_vec(result.x))
     shirotate_log.write("--------------------\n")
     final_J2 = objective_function(result.x, s_ab_matrix)
 
-    shirotate_log.write("\n")
-    shirotate_log.write(f"The minimization is done after {result.nit} steps.\n")
-    shirotate_log.write(
-        f"Squared Frobenius norm     ||abs(S)-1||2F  =  {final_J2:.5f} \n"
-    )
     numb_steps = result.nit
 
     rotated_alpha = np.dot(A, final_rotation_matrix)
@@ -628,8 +662,8 @@ def shi_rotate():
 
     shirotate_log.write("\n")
 
-    if abs(S_aSOMO_bSUMO) < 0.97:
-        shirotate_log.write("WARNING: Frobenius norm is too high.\n")
+    if not permuted_identity(last_step_overlap):
+        shirotate_log.write("WARNING: Overlap matrix is not permuted identity.\n")
         shirotate_log.write("JOB FAILED\n")
         return False, "failed", final_J2
     print("\n")
