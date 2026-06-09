@@ -181,7 +181,7 @@ def write_ascii_movec(
             g.writelines(f.readlines()[-1])
 
 
-def excute_bash_command(command):
+def execute_bash(command):
     bash_result = subprocess.run(command.split(), capture_output=True, text=True)
     if bash_result.returncode != 0:
         shirotate_log.write(f"Error executing command: {command}\n")
@@ -747,23 +747,18 @@ def shi_rotate():
         nw_file = "input.nw"
         shirotate_log.write(nw_file)
 
-        def generate_nwchem_cube(
-            file_name, nw_file, movecs_file, list_mo, grid, cube_type
-        ):
+        def gen_nwchem_cube(file_name, nw_file, movecs_file, list_mo, grid, cube_type):
             copy_command = f"""cp {nw_file} {file_name}.nw"""
-            excute_bash_command(copy_command)
+            execute_bash(copy_command)
             dplot_command = f"""{dplot} -i {file_name}.nw -m {movecs_file} {list_mo} {cube_type} -g {grid}"""
             print(dplot_command)
-            excute_bash_command(dplot_command)
-            nwchem_command = f"""{nwchem} dplot.nw > dplot.out"""
-            excute_bash_command(nwchem_command)
-            clean_command = f"""rm {file_name}.nw"""
-            excute_bash_command(clean_command)
+            execute_bash(dplot_command)
+            execute_bash(f"mv dplot.nw {file_name}_dplot.nw")
 
         shirotate_log.write("----------------------------")
         shirotate_log.write("Generation cube files by NWChem and dplot\n")
         mov2asc_command = f"""{mov2asc} {nbas} molecule.movecs canonical.ascii"""
-        excute_bash_command(mov2asc_command)
+        execute_bash(mov2asc_command)
 
         # CREATE ROTATED MOVECS
         write_ascii_movec(
@@ -776,11 +771,11 @@ def shi_rotate():
             c_b,
         )
         asc2mov_command = f"""{asc2mov} {nbas} rotated.ascii rotated.movecs"""
-        excute_bash_command(asc2mov_command)
+        execute_bash(asc2mov_command)
 
         # Canonical cubes
-        generate_nwchem_cube(
-            f"canonical",
+        gen_nwchem_cube(
+            "canonical",
             nw_file,
             "molecule.movecs",
             f"-l {numb_alfa_elec - numb_occ_cubes}-{numb_alfa_elec + numb_vir_cubes}",
@@ -788,8 +783,8 @@ def shi_rotate():
             "-a",
         )
         # Rotated cubes
-        generate_nwchem_cube(
-            f"rotated",
+        gen_nwchem_cube(
+            "rotated",
             nw_file,
             "rotated.movecs",
             f"-l {numb_alfa_elec - numb_occ_cubes}-{numb_alfa_elec + numb_vir_cubes}",
@@ -797,9 +792,7 @@ def shi_rotate():
             "",
         )
         # Spin density
-        generate_nwchem_cube(
-            f"canonical", nw_file, "molecule.movecs", "", 100, "-d spin"
-        )
+        gen_nwchem_cube("canonical", nw_file, "molecule.movecs", "", 100, "-d spin")
 
     return True, shi_gap, final_J2
 
