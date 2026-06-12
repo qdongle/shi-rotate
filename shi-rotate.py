@@ -561,14 +561,14 @@ def shi_rotate():
     # Get the initial guess for vector X to form antisymmetric matrix
     init_guess = np.zeros(n_uniq_elem)
     row_indices, col_indices = jnp.triu_indices(N, k=1)
-    idx = 0
+    a_idx = 0
     for i, j in zip(row_indices, col_indices):
         abs_overl = abs(S_ab[i, j])
         if abs_overl > 0.90 or abs_overl < 0.10:
-            init_guess[idx] = 0.0
+            init_guess[a_idx] = 0.0
         else:
-            init_guess[idx] = -S_ab[i, j] + np.random.uniform(-0.1, 0.1)
-        idx += 1
+            init_guess[a_idx] = -S_ab[i, j] + np.random.uniform(-0.1, 0.1)
+        a_idx += 1
 
     grad_fn = jax.grad(objective_func)
 
@@ -577,14 +577,14 @@ def shi_rotate():
     def callback_func(xk):
         nonlocal step
         J2 = objective_func(xk, S_ab)
-        shirotate_log.write(f"{step:>5d}   {J2:>12.8f} \n")
+        shirotate_log.write(f"{step:<4d}   {J2:>13.8f} \n")
         step += 1
 
-    shirotate_log.write("=============================\n")
-    shirotate_log.write("         CONVERGENCE\n")
-    shirotate_log.write("=============================\n")
-    shirotate_log.write("step               obj. func.\n")
-    shirotate_log.write("-----------------------------\n")
+    shirotate_log.write("====================\n")
+    shirotate_log.write("    CONVERGENCE\n")
+    shirotate_log.write("====================\n")
+    shirotate_log.write("step      obj. func.\n")
+    shirotate_log.write("--------------------\n")
 
     result = minimize(
         lambda v, s_ab_matrix: np.asarray(objective_func(v, s_ab_matrix)),
@@ -640,29 +640,44 @@ def shi_rotate():
         return False, "failed", final_J2
     print("\n")
 
-    shirotate_log.write("==============================\n")
-    shirotate_log.write("       Alpha MO energies   eV\n")
-    shirotate_log.write("==============================\n")
-    shirotate_log.write(" #        scf       rotated  \n")
-    shirotate_log.write("------------------------------\n")
-    for idx in range(n_alpha_elec):
-        beta_orb, ovlp = matching_orbital(final_overlap[idx, :])
-        note = " " if idx == beta_orb else "*"
+    cmo_beta_ener = (c_b @ F_beta @ c_b.T).diagonal()
+    shirotate_log.write("================================\n")
+    shirotate_log.write("    Alpha MO energies (eV)\n")
+    shirotate_log.write("================================\n")
+    shirotate_log.write("i       canonical        rotated  \n")
+    shirotate_log.write("--------------------------------\n")
+    for a_idx in range(n_alpha_elec):
         shirotate_log.write(
-            f"""{idx + 1:>3d} {cmo_alpha_ener[idx] * toEV:>12.3f} {rotated_alpha_ener[idx] * toEV:>12.3f}       <{idx + 1:>4d} | {beta_orb + 1:<4d}> = {ovlp:>5.2f} {note}   \n"""
+            f"""{a_idx + 1:<4d} {cmo_alpha_ener[a_idx] * toEV:>12.3f}   {rotated_alpha_ener[a_idx] * toEV:>12.3f}   \n"""
         )
     shirotate_log.write("\n")
     shirotate_log.write("\n")
 
-    cmo_beta_ener = (c_b @ F_beta @ c_b.T).diagonal()
-    shirotate_log.write("==============================\n")
-    shirotate_log.write("Alpha and Beta MO energies eV\n")
-    shirotate_log.write("==============================\n")
-    shirotate_log.write(" #       alpha        beta   \n")
-    shirotate_log.write("------------------------------\n")
-    for idx in range(beta_sumo_idx):
+    shirotate_log.write("==========================================\n")
+    shirotate_log.write("            MO energies eV\n")
+    shirotate_log.write("==========================================\n")
+    shirotate_log.write("i    rotated ALPHA  canonical BETA    S_ii\n")
+    shirotate_log.write("------------------------------------------\n")
+    for a_idx in range(beta_sumo_idx):
+        ovlp_str = (
+            f"{final_overlap[a_idx, a_idx]:>5.2f}"
+            if abs(final_overlap[a_idx, a_idx]) > 0.01
+            else "  0  "
+        )
         shirotate_log.write(
-            f"""{idx + 1:>3d} {rotated_alpha_ener[idx] * toEV:>12.3f} {cmo_beta_ener[idx] * toEV:>12.3f}   \n"""
+            f"""{a_idx + 1:<4d} {rotated_alpha_ener[a_idx] * toEV:>13.3f}   {cmo_beta_ener[a_idx] * toEV:>13.3f}   {ovlp_str}\n"""
+        )
+
+    shirotate_log.write("===============================\n")
+    shirotate_log.write("Matching rotated alpha and beta\n")
+    shirotate_log.write("===============================\n")
+    shirotate_log.write("alpha(i)  beta(j)  S_ij    swap\n")
+    shirotate_log.write("-------------------------------\n")
+    for a_idx in range(n_alpha_elec):
+        b_idx, ovlp = matching_orbital(final_overlap[a_idx, :])
+        note = "   " if a_idx == b_idx else "yes"
+        shirotate_log.write(
+            f"""   {a_idx + 1:>5d}  {b_idx + 1:<5d}    {ovlp:>5.2f}    {note} \n"""
         )
     shirotate_log.write("\n")
     shirotate_log.write("\n")
