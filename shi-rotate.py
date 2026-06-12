@@ -12,6 +12,7 @@ from functools import reduce
 import jax
 import jax.numpy as jnp
 import numpy as np
+import scipy.linalg as la
 from jax import config
 from jax.scipy.linalg import expm
 from scipy.optimize import minimize
@@ -556,19 +557,14 @@ def objective_func(vec, s_ab_matrix):
     return J2
 
 
-def shi_rotate():
+U, S, Vt = np.linalg.svd(S_ab)
+R_init = U @ Vt
+init_W = np.real(la.logm(R_init))
+upper_indices = np.triu_indices_from(init_W, k=1)
+init_guess = init_W[upper_indices]
 
-    # Get the initial guess for vector X to form antisymmetric matrix
-    init_guess = np.zeros(n_uniq_elem)
-    row_indices, col_indices = jnp.triu_indices(N, k=1)
-    a_idx = 0
-    for i, j in zip(row_indices, col_indices):
-        abs_overl = abs(S_ab[i, j])
-        if abs_overl > 0.90 or abs_overl < 0.10:
-            init_guess[a_idx] = 0.0
-        else:
-            init_guess[a_idx] = -S_ab[i, j] + np.random.uniform(-0.1, 0.1)
-        a_idx += 1
+
+def shi_rotate():
 
     grad_fn = jax.grad(objective_func)
 
@@ -638,7 +634,6 @@ def shi_rotate():
         shirotate_log.write("WARNING: Overlap matrix is not permuted identity.\n")
         shirotate_log.write("JOB FAILED\n")
         return False, "failed", final_J2
-    print("\n")
 
     cmo_beta_ener = (c_b @ F_beta @ c_b.T).diagonal()
     shirotate_log.write("================================\n")
@@ -650,9 +645,8 @@ def shi_rotate():
         shirotate_log.write(
             f"""{a_idx + 1:<4d} {cmo_alpha_ener[a_idx] * toEV:>12.3f}   {rotated_alpha_ener[a_idx] * toEV:>12.3f}   \n"""
         )
-    shirotate_log.write("\n")
-    shirotate_log.write("\n")
 
+    shirotate_log.write("\n\n")
     shirotate_log.write("==========================================\n")
     shirotate_log.write("            MO energies eV\n")
     shirotate_log.write("==========================================\n")
@@ -668,6 +662,7 @@ def shi_rotate():
             f"""{a_idx + 1:<4d} {rotated_alpha_ener[a_idx] * toEV:>13.3f}   {cmo_beta_ener[a_idx] * toEV:>13.3f}   {ovlp_str}\n"""
         )
 
+    shirotate_log.write("\n\n")
     shirotate_log.write("===============================\n")
     shirotate_log.write("Matching rotated alpha and beta\n")
     shirotate_log.write("===============================\n")
@@ -679,11 +674,11 @@ def shi_rotate():
         shirotate_log.write(
             f"""   {a_idx + 1:>5d}  {b_idx + 1:<5d}    {ovlp:>5.2f}    {note} \n"""
         )
-    shirotate_log.write("\n")
-    shirotate_log.write("\n")
+
     b_HOMO_energy = cmo_beta_ener[beta_sumo_idx - 2]  # python start at 0
     a_HOMO_energy = np.max(rotated_alpha_ener)
     shi_gap = (a_HOMO_energy - a_SOMO_energy) * toEV
+    shirotate_log.write("\n\n")
     shirotate_log.write("==============================\n")
     shirotate_log.write("           SHI GAP          eV\n")
     shirotate_log.write("==============================\n")
