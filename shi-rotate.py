@@ -386,18 +386,16 @@ def matching_orbital(ovlp_ab, threshold=0.97):
 c_a, c_b, S_bf, _, _, F_alfa, F_beta, nbas, n_alpha_elec, n_beta_elec = (
     get_data_from_gen(file47)
 )
-if n_beta_elec != n_alpha_elec - 1:
-    shirotate_log.write(
-        f"NOTE: This molecule is not a doublet radical. # alpha electrons = {n_alpha_elec}  ,  # beta electrons = {n_beta_elec}"
-    )
-    shirotate_log.write(
-        "      SHI-rotate is epxerimental for triplet, quartet radicals,..."
-    )
 
-beta_sumo_idx = n_beta_elec + 1
+dlt_elec = n_alpha_elec - n_beta_elec
+a_HOMO_idx = n_alpha_elec - 1
+b_HOMO_idx = n_beta_elec - 1
+b_SUMO_idx = n_beta_elec
+
 shirotate_log.write("\n")
-shirotate_log.write(f"                Alpha HOMO index: {n_alpha_elec}\n")
-shirotate_log.write(f"                 Beta SUMO index: {beta_sumo_idx}\n")
+shirotate_log.write(f"                Alpha HOMO index: {a_HOMO_idx + 1}\n")
+shirotate_log.write(f"                 Beta SUMO index: {b_SUMO_idx + 1}\n\n")
+shirotate_log.write(f"                            2S+1: {0.5 * dlt_elec * 2 + 1:.0f}\n")
 # Get the MO coefs
 # alpha_coef and beta_coef are NOT full coefs matrix. It only include alpha occupied  (all occ)
 # and beta occupied + beta SUMO (all occ+1virt)
@@ -405,58 +403,9 @@ initial_S_ab = reduce(np.dot, (c_a, S_bf, c_b.T))
 
 
 # Alpha set contains orbitals that will be used in rotation
-alpha_set = []
-beta_set = []
-recur_step = 0
-max_depth = 10
+alpha_set = [i + 1 for i in range(n_alpha_elec)]
+beta_set = [i + 1 for i in range(n_alpha_elec)]
 
-
-def check_overlap(a, b):
-    if a == "all":
-        ib = b - 1
-        for ia in range(beta_sumo_idx):
-            if abs(initial_S_ab[ia][ib]) > args.overlap_threshold:
-                if not (ia + 1 in alpha_set):
-                    alpha_set.append(ia + 1)
-    if b == "all":
-        ia = a - 1
-        for ib in range(beta_sumo_idx):
-            if abs(initial_S_ab[ia][ib]) > args.overlap_threshold:
-                if not (ib + 1 in beta_set):
-                    beta_set.append(ib + 1)
-
-
-def recursive_check(current_depth=0):
-    if current_depth >= max_depth:
-        shirotate_log.write("Maximum recursion depth reached!\n")
-        return
-
-    if len(alpha_set) == 0:
-        check_overlap("all", beta_sumo_idx)
-        for a in alpha_set:
-            check_overlap(a, "all")
-    if len(alpha_set) > len(beta_set):
-        # Find more beta orbitals for existing alpha orbitals
-        for a in alpha_set:
-            check_overlap(a, "all")
-    elif len(beta_set) > len(alpha_set):
-        # Find more alpha orbitals for existing beta orbitals
-        for b in beta_set:
-            check_overlap("all", b)
-
-    # Check if sets are equal in length
-    if len(alpha_set) != len(beta_set):
-        current_depth = current_depth + 1
-        recursive_check(current_depth)  # Recurse until sets are equal
-    else:
-        shirotate_log.write("OVERLAP THRESHOLD: " + str(args.overlap_threshold) + "\n")
-
-
-if args.overlap_threshold == 0.0:
-    alpha_set = [i + 1 for i in range(n_alpha_elec)]
-    beta_set = [i + 1 for i in range(n_alpha_elec)]
-else:
-    recursive_check(0)
 
 alpha_set = sorted(alpha_set)
 beta_set = sorted(beta_set)
@@ -467,28 +416,7 @@ print_overlap(initial_S_ab[np.ix_(alpha_set, beta_set)], n_alpha_elec, 7)
 
 shirotate_log.write("\n")
 shirotate_log.write(f"Alpha set used in rotation {len(alpha_set)} MOs: ")
-if args.overlap_threshold == 0.0:
-    shirotate_log.write(f"[All] = {n_alpha_elec} occ.")
-else:
-    h = 0
-    shirotate_log.write("\n")
-    for orb in alpha_set:
-        h = h + 1
-        shirotate_log.write(f"{orb}  ")
-        if h % 10 == 0:
-            shirotate_log.write("\n")
 
-shirotate_log.write("\nBeta reference set: ")
-if args.overlap_threshold == 0.0:
-    shirotate_log.write(f"[All] = {beta_sumo_idx - 1} occ + 1 vir.")
-else:
-    h = 0
-    shirotate_log.write("\n")
-    for orb in beta_set:
-        h = h + 1
-        shirotate_log.write(f"{orb}  ")
-        shirotate_log.write("\n") if h % 10 == 0 else None
-shirotate_log.write("\n")
 # Define the shape of rotation matrix
 N = len(alpha_set)
 n_uniq_elem = N * (N - 1) // 2  # Number of unique elements in X
@@ -602,17 +530,11 @@ def shi_rotate():
 
     rotated_A = np.dot(A, final_rotation_matrix)
 
-    rotated_alpha_ener = (rotated_A.T @ F_alfa @ rotated_A).diagonal()
-    cmo_alpha_ener = (
-        c_a @ F_alfa @ c_a.T
-    ).diagonal()  # This is NOT wrong. Just because NWChem print each MO line by line
-
-    a_SOMO_energy = rotated_alpha_ener[-1]
+    rotated_alpha_ener = toEV * ((rotated_A.T @ F_alfa @ rotated_A).diagonal())
+    cmo_alpha_ener = toEV * ((c_a @ F_alfa @ c_a.T).diagonal())
 
     ### new_alpha_energies: new alpha_occupied energies
-    argsort_ener = np.argsort(
-        rotated_alpha_ener
-    )  # Get the index of the sorted energies
+    argsort_ener = np.argsort(rotated_alpha_ener)
     rotated_alpha_ener = rotated_alpha_ener[argsort_ener]
     # -------------
     rotated_A = rotated_A[:, argsort_ener]
@@ -635,7 +557,7 @@ def shi_rotate():
         shirotate_log.write("JOB FAILED\n")
         return False, "failed", final_J2
 
-    cmo_beta_ener = (c_b @ F_beta @ c_b.T).diagonal()
+    cmo_beta_ener = toEV * ((c_b @ F_beta @ c_b.T).diagonal())
     shirotate_log.write("================================\n")
     shirotate_log.write("    Alpha MO energies (eV)\n")
     shirotate_log.write("================================\n")
@@ -643,7 +565,7 @@ def shi_rotate():
     shirotate_log.write("--------------------------------\n")
     for a_idx in range(n_alpha_elec):
         shirotate_log.write(
-            f"""{a_idx + 1:<4d} {cmo_alpha_ener[a_idx] * toEV:>12.3f}   {rotated_alpha_ener[a_idx] * toEV:>12.3f}   \n"""
+            f"""{a_idx + 1:<4d} {cmo_alpha_ener[a_idx]:>12.3f}   {rotated_alpha_ener[a_idx]:>12.3f}   \n"""
         )
 
     shirotate_log.write("\n\n")
@@ -652,15 +574,18 @@ def shi_rotate():
     shirotate_log.write("==========================================\n")
     shirotate_log.write("i    rotated ALPHA  canonical BETA    S_ii\n")
     shirotate_log.write("------------------------------------------\n")
-    for a_idx in range(beta_sumo_idx):
+    for a_idx in range(n_alpha_elec):
         ovlp_str = (
             f"{final_overlap[a_idx, a_idx]:>5.2f}"
             if abs(final_overlap[a_idx, a_idx]) > 0.01
             else "  0  "
         )
         shirotate_log.write(
-            f"""{a_idx + 1:<4d} {rotated_alpha_ener[a_idx] * toEV:>13.3f}   {cmo_beta_ener[a_idx] * toEV:>13.3f}   {ovlp_str}\n"""
+            f"""{a_idx + 1:<4d} {rotated_alpha_ener[a_idx]:>13.3f}   {cmo_beta_ener[a_idx]:>13.3f}   {ovlp_str}\n"""
         )
+
+    a_SOMO_idx = []
+    b_SUMO_idx = []
 
     shirotate_log.write("\n\n")
     shirotate_log.write("===============================\n")
@@ -674,33 +599,60 @@ def shi_rotate():
         shirotate_log.write(
             f"""   {a_idx + 1:>5d}  {b_idx + 1:<5d}    {ovlp:>5.2f}    {note} \n"""
         )
+        if b_idx >= n_beta_elec:
+            a_SOMO_idx.append(a_idx)
+            b_SUMO_idx.append(b_idx)
 
-    b_HOMO_energy = cmo_beta_ener[beta_sumo_idx - 2]  # python start at 0
-    a_HOMO_energy = np.max(rotated_alpha_ener)
-    shi_gap = (a_HOMO_energy - a_SOMO_energy) * toEV
     shirotate_log.write("\n\n")
-    shirotate_log.write("==============================\n")
-    shirotate_log.write("           SHI GAP          eV\n")
-    shirotate_log.write("==============================\n")
-    shirotate_log.write(f"a HOMO: {a_HOMO_energy * toEV:.4f} eV\n")
-    shirotate_log.write(f"a SOMO: {a_SOMO_energy * toEV:.4f} eV\n")
-    shirotate_log.write(f"SHI gap: {shi_gap:.4f} eV\n")
+    shirotate_log.write("=============================================\n")
+    shirotate_log.write("        Alpha SOMO(i) and beta SUMO(j)\n")
+    shirotate_log.write("=============================================\n")
+    shirotate_log.write("   i - j     S_ij        a_SOMO        b_SUMO\n")
+    shirotate_log.write("---------------------------------------------\n")
+    for idx in range(dlt_elec):
+        a_idx = a_SOMO_idx[idx]
+        b_idx = b_SUMO_idx[idx]
+        ovlp = final_overlap[a_idx, b_idx]
+        shirotate_log.write(
+            f"""{a_idx + 1:>5d} {b_idx + 1:<5d} {ovlp:>5.2f} {rotated_alpha_ener[a_idx]:>13.3f} {cmo_beta_ener[b_idx]:>13.3f} \n"""
+        )
+        if b_idx == n_beta_elec:
+            matched_a_SOMO = rotated_alpha_ener[a_idx]
+            matched_a_idx = a_idx
+
+    b_HOMO_ener = cmo_beta_ener[b_HOMO_idx]
+    a_HOMO_ener = np.max(rotated_alpha_ener)
+
+    shi_gap = a_HOMO_ener - matched_a_SOMO
+    shirotate_log.write("\n\n")
+    shirotate_log.write("=====================================\n")
+    shirotate_log.write("              SHI GAP\n")
+    shirotate_log.write("=====================================\n")
+    shirotate_log.write("  alpha                 beta\n\n")
+    shirotate_log.write(
+        f"  HOMO: {a_HOMO_ener:<10.4f}      SUMO: {cmo_beta_ener[n_beta_elec]:<10.4f}\n"
+    )
+    if a_HOMO_idx != matched_a_idx:
+        shirotate_log.write(
+            f"                        HOMO: {cmo_beta_ener[b_HOMO_idx]:<10.4f}\n\n"
+        )
+        shirotate_log.write(f"  SOMO: {matched_a_SOMO:<10.4f}\n")
+    else:
+        shirotate_log.write(
+            f"  SOMO: {matched_a_SOMO:<10.4f}      HOMO: {cmo_beta_ener[b_HOMO_idx]:<10.4f}\n"
+        )
+    shirotate_log.write(f"  ---------------\n  SHI gap: {shi_gap:.4f}\n")
     full_rotated_alpha_energies = np.concatenate(
         (rotated_alpha_ener, cmo_alpha_ener[n_alpha_elec:])
     )
     full_A = np.vstack((rotated_A.T, c_a[n_alpha_elec:, :]))
     shirotate_log.write("\n")
 
-    if abs(a_HOMO_energy - cmo_alpha_ener[n_alpha_elec - 1]) < 1e-6:
-        shirotate_log.write("\nWARNING: Alpha canonical HOMO is changed!\n")
-        print(a_HOMO_energy)
-        print(cmo_alpha_ener[n_alpha_elec - 1])
-
-    if shi_gap == 0.0 and b_HOMO_energy < a_HOMO_energy:
+    if shi_gap == 0.0 and b_HOMO_ener < a_HOMO_ener:
         shirotate_log.write("Classification: (non SHI)\n")
-    elif shi_gap == 0.0 and b_HOMO_energy > a_HOMO_energy:
+    elif shi_gap == 0.0 and b_HOMO_ener > a_HOMO_ener:
         shirotate_log.write("Classification: (partial SHI)")
-    elif shi_gap > 0.0 and b_HOMO_energy > a_HOMO_energy:
+    elif shi_gap > 0.0 and b_HOMO_ener > a_HOMO_ener:
         shirotate_log.write("Classification: (SHI)")
 
     if args.movecs:
